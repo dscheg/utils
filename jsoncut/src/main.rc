@@ -1,0 +1,19 @@
+1 versioninfo
+fileversion 0,1,0,0
+filetype 0x1
+{
+    block "StringFileInfo"
+    {
+        block "040904e4"
+        {
+            value "FileDescription", "JSON cut utility"
+            value "ProductName", "https://github.com/dscheg/utils/jsoncut"
+            value "LegalCopyright", "© Titarenko Dmitriy"
+        }
+    }
+
+    block "VarFileInfo"
+    {
+        value "Translation", 0x0409 0x04E4
+    }
+}

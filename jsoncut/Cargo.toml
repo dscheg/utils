@@ -1,0 +1,15 @@
+[package]
+name = "jsoncut"
+version = "0.1.0"
+authors = ["Dmitriy Titarenko <mail.dscheg@gmail.com>"]
+build = "build.rs"
+
+[profile.release]
+panic = 'abort'
+debug = false
+opt-level = 3
+lto = true
+
+[dependencies]
+getopts = "0.2"
+rustc-serialize="0.3"
