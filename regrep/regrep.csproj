@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<Version>1.0</Version>
+		<AssemblyTitle>https://github.com/dscheg/utils/regrep</AssemblyTitle>
+		<Copyright>Copyright © Titarenko Dmitriy</Copyright>
+		<Authors>dscheg</Authors>
+		<Company />
+
+		<OutputType>Exe</OutputType>
+		<OutputPath>bin\</OutputPath>
+		<PlatformTarget>AnyCPU</PlatformTarget>
+		<TargetFramework>net471</TargetFramework>
+		<LangVersion>8.0</LangVersion>
+
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+		<DefineConstants />
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="Microsoft.CSharp" />
+	</ItemGroup>
+</Project>
