@@ -127,11 +127,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
-using System.Globalization;
 using System.IO;
-using System.Runtime.Serialization;
-using System.Security.Permissions;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -341,11 +337,10 @@ namespace NDesk.Options {
 
 		protected static T Parse<T> (string value, OptionContext c)
 		{
-			TypeConverter conv = TypeDescriptor.GetConverter (typeof (T));
 			T t = default (T);
 			try {
 				if (value != null)
-					t = (T) conv.ConvertFromInvariantString (value);
+					t = (T) Convert.ChangeType(value, typeof (T));
 			}
 			catch (Exception e) {
 				throw new OptionException (
@@ -471,21 +466,8 @@ namespace NDesk.Options {
 			this.option = optionName;
 		}
 
-		protected OptionException (SerializationInfo info, StreamingContext context)
-			: base (info, context)
-		{
-			this.option = info.GetString ("OptionName");
-		}
-
 		public string OptionName {
 			get {return this.option;}
-		}
-
-		[SecurityPermission (SecurityAction.LinkDemand, SerializationFormatter = true)]
-		public override void GetObjectData (SerializationInfo info, StreamingContext context)
-		{
-			base.GetObjectData (info, context);
-			info.AddValue ("OptionName", option);
 		}
 	}
 

@@ -7,21 +7,26 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Linq;
-using Microsoft.Win32.SafeHandles;
 using NDesk.Options;
 
 namespace regrep
 {
 	internal static class Program
 	{
-		private static void Main(string[] args)
+		private static int Main(string[] args)
 		{
+			var flags = Native.ConsoleModes.INVALID;
+			IntPtr stdOutHandle = Native.INVALID_HANDLE_VALUE, stdErrHandle = Native.INVALID_HANDLE_VALUE;
+
 			try
 			{
 				int threads = 1;
 				Encoding encoding = Encoding.UTF8;
 				string pattern = null, replacement = null;
-				bool invertMatch = false, ignoreCase = false, onlyMatching = false, silent = !(Console.IsInputRedirected && Console.IsOutputRedirected), showHelpAndExit = false;
+				bool invertMatch = false, ignoreCase = false, onlyMatching = false, showHelpAndExit = false;
+
+				bool silent = !(Console.IsInputRedirected && Console.IsOutputRedirected);
+				bool colored = !Console.IsOutputRedirected;
 
 				var options = new OptionSet
 				{
@@ -29,6 +34,7 @@ namespace regrep
 					{
 						try
 						{
+							Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 							encoding = int.TryParse(v, out var codepage)
 								? Encoding.GetEncoding(codepage)
 								: Encoding.GetEncoding(v);
@@ -107,10 +113,11 @@ Supports character escapes in both PATTERN and REPLACEMENT:
 
 Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 					Console.Error.WriteLine();
-					Environment.Exit(2);
+					return 2;
 				}
 
 				var regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.CultureInvariant | (ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None));
+				var sanitizeRegex = new Regex(@"\p{Cc}", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
 				Console.InputEncoding = encoding;
 				Console.OutputEncoding = encoding;
@@ -118,10 +125,10 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 				long lines = 0L, matches = 0L;
 				var total = new Stopwatch();
 
-				var stdErrHandle = Native.GetStdHandle(Native.STD_ERROR_HANDLE);
-				var stdOutHandle = Native.GetStdHandle(Native.STD_OUTPUT_HANDLE);
+				stdErrHandle = Native.GetStdHandle(Native.STD_ERROR_HANDLE);
+				stdOutHandle = Native.GetStdHandle(Native.STD_OUTPUT_HANDLE);
 
-				silent = silent || Console.IsErrorRedirected || stdErrHandle == Native.INVALID_HANDLE_VALUE || stdOutHandle == Native.INVALID_HANDLE_VALUE || Native.GetFileType(new SafeFileHandle(stdOutHandle, false)) == Native.FILE_TYPE_PIPE;
+				silent = silent || Console.IsErrorRedirected || stdErrHandle == Native.INVALID_HANDLE_VALUE || stdOutHandle == Native.INVALID_HANDLE_VALUE || Native.GetFileType(stdOutHandle) == Native.FILE_TYPE_PIPE;
 
 				var lockobj = new object();
 				void PrintStats(object state)
@@ -136,7 +143,8 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 							if(!Native.GetConsoleScreenBufferInfo(stdErrHandle, out var info))
 								return;
 
-							Native.SetConsoleCursorPosition(stdErrHandle, new Native.COORD {X = 0, Y = (short)(info.dwCursorPosition.Y - 2)});
+							if(!Native.SetConsoleCursorPosition(stdErrHandle, new Native.COORD {X = 0, Y = (short)(info.dwCursorPosition.Y - 2)}))
+								return;
 
 							var lns = Interlocked.Read(ref lines);
 							var mts = Interlocked.Read(ref matches);
@@ -161,10 +169,33 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 				using var tick = silent ? null : new Timer(PrintStats, false, 100, 100);
 
 				total.Start();
-				var source = Console.In.ReadLines().With(line => Interlocked.Increment(ref lines)).AsParallel().AsOrdered().WithDegreeOfParallelism(threads);
+
+				var firstLine = Console.In.ReadLine(); //When using piping, some unix utils may change the console mode before the first write, so we need to change console mode after that
+				colored = colored && stdOutHandle != Native.INVALID_HANDLE_VALUE && EnableVirtualTerminalProcessing(stdOutHandle, out flags);
+
+				if(colored)
+				{
+					replacement = $"\x1b[93m{replacement ?? "$&"}\x1b[m";
+					Console.CancelKeyPress += (_, _) =>
+					{
+						if(stdOutHandle != Native.INVALID_HANDLE_VALUE && flags != Native.ConsoleModes.INVALID)
+							Native.SetConsoleMode(stdOutHandle, flags);
+					};
+				}
+
+				var source = (firstLine == null ? Enumerable.Empty<string>() : new[] { firstLine })
+					.Concat(Console.In.ReadLines())
+					.AsParallel()
+					.AsOrdered()
+					.WithDegreeOfParallelism(threads)
+					.With(_ => Interlocked.Increment(ref lines));
+
+				if(!Console.IsOutputRedirected)
+					source = source.Select(line => sanitizeRegex.Replace(line, "\ufffc"));
+
 				if(onlyMatching)
 				{
-					var result = source.SelectMany(line => invertMatch ? Enumerable.Empty<Match>() : regex.Matches(line).OfType<Match>());
+					var result = source.SelectMany(line => invertMatch ? Enumerable.Empty<Match>() : regex.Matches(line));
 					source = replacement == null ? result.Select(m => m.Value) : result.Select(m => m.Result(replacement));
 				}
 				else
@@ -172,19 +203,28 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 					source = source.Where(line => invertMatch ^ regex.IsMatch(line));
 					if(replacement != null) source = source.Select(line => regex.Replace(line, replacement));
 				}
-				source.AsSequential().With(match => Interlocked.Increment(ref matches)).ForEach(Console.WriteLine);
+
+				source
+					.With(_ => Interlocked.Increment(ref matches))
+					.AsSequential()
+					.ForEach(Console.Out.WriteLine);
 
 				total.Stop();
 				tick?.Change(Timeout.Infinite, Timeout.Infinite);
 
 				if(!silent) PrintStats(true);
 
-				Environment.Exit(matches > 0 ? 0 : 1);
+				return matches > 0 ? 0 : 1;
 			}
 			catch(Exception e)
 			{
 				Console.Error.WriteLine(e.Message);
-				Environment.Exit(2);
+				return 2;
+			}
+			finally
+			{
+				if(stdOutHandle != Native.INVALID_HANDLE_VALUE && flags != Native.ConsoleModes.INVALID)
+					Native.SetConsoleMode(stdOutHandle, flags);
 			}
 		}
 
@@ -201,13 +241,23 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 				action(item);
 		}
 
-		private static IEnumerable<T> With<T>(this IEnumerable<T> enumerable, Action<T> action)
+		private static ParallelQuery<T> With<T>(this ParallelQuery<T> enumerable, Action<T> action) => enumerable.Select(item =>
 		{
-			foreach(var item in enumerable)
-			{
-				action(item);
-				yield return item;
-			}
+			action(item);
+			return item;
+		});
+
+		private static bool EnableVirtualTerminalProcessing(IntPtr consoleHandle, out Native.ConsoleModes flags)
+		{
+			if(!Native.GetConsoleMode(consoleHandle, out flags))
+				return false;
+
+			const Native.ConsoleModes flagsToSet = Native.ConsoleModes.ENABLE_PROCESSED_OUTPUT | Native.ConsoleModes.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+			if((flags & flagsToSet) != flagsToSet && !Native.SetConsoleMode(consoleHandle, flags | flagsToSet))
+				return false;
+
+			Console.Write("\x1b[m");
+			return true;
 		}
 	}
 }
