@@ -9,20 +9,21 @@ using System.Linq;
 using NDesk.Options;
 
 var flags = Native.ConsoleModes.INVALID;
-IntPtr stdOutHandle = Native.INVALID_HANDLE_VALUE, stdErrHandle = Native.INVALID_HANDLE_VALUE;
+var stdOutHandle = Native.INVALID_HANDLE_VALUE;
 
 try
 {
 	int threads = 1;
 	Encoding encoding = Encoding.UTF8;
 	string pattern = null, replacement = null;
-	bool invertMatch = false, ignoreCase = false, onlyMatching = false, showHelpAndExit = false;
+	bool all = false, invertMatch = false, ignoreCase = false, onlyMatching = false, showHelpAndExit = false;
 
 	bool silent = !(Console.IsInputRedirected && Console.IsOutputRedirected);
 	bool colored = !Console.IsOutputRedirected;
 
 	var options = new OptionSet
 	{
+		{"a|match-all", "Match all lines and only substitute REPLACEMENT", v => all = v != null},
 		{"e|encoding=", "Input/output {ENCODING} (default UTF-8)", v =>
 		{
 			try
@@ -30,7 +31,7 @@ try
 				Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 				encoding = int.TryParse(v, out var codepage)
 					? Encoding.GetEncoding(codepage)
-					: Encoding.GetEncoding(v);
+					: Encoding.GetEncoding(v!);
 			}
 			catch
 			{
@@ -38,7 +39,7 @@ try
 			}
 		}},
 		{"i|ignore-case", "Ignore case distinctions", v => ignoreCase = v != null},
-		{"v|invert-match", "Select non matching lines", v => invertMatch = v != null},
+		{"v|invert-match", "Select non-matching lines", v => invertMatch = v != null},
 		{"o|only-matching", "Show only the part of a line matching PATTERN", v => onlyMatching = v != null},
 		{"n|threads=", "Number of threads (default 1)", (int v) => threads = Math.Min(Math.Max(1, v), Environment.ProcessorCount)},
 		{"s|silent", "Silent mode", v => silent = v != null},
@@ -67,6 +68,12 @@ try
 	if(invertMatch && onlyMatching)
 	{
 		Console.Error.WriteLine("Only-matching & invert-match can't be used together");
+		showHelpAndExit = true;
+	}
+
+	if(all && (invertMatch || onlyMatching || replacement == null))
+	{
+		Console.Error.WriteLine("Replace-only can't be used with only-matching or invert-match also REPLACEMENT must be specified");
 		showHelpAndExit = true;
 	}
 
@@ -118,7 +125,7 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 	long lines = 0L, matches = 0L;
 	var total = new Stopwatch();
 
-	stdErrHandle = Native.GetStdHandle(Native.STD_ERROR_HANDLE);
+	var stdErrHandle = Native.GetStdHandle(Native.STD_ERROR_HANDLE);
 	stdOutHandle = Native.GetStdHandle(Native.STD_OUTPUT_HANDLE);
 
 	silent = silent || Console.IsErrorRedirected || stdErrHandle == Native.INVALID_HANDLE_VALUE || stdOutHandle == Native.INVALID_HANDLE_VALUE || Native.GetFileType(stdOutHandle) == Native.FILE_TYPE_PIPE;
@@ -166,11 +173,13 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 	var firstLine = Console.In.ReadLine(); //When using piping, some unix utils may change the console mode before the first write, so we need to change console mode after that
 	colored = colored && stdOutHandle != Native.INVALID_HANDLE_VALUE && EnableVirtualTerminalProcessing(stdOutHandle, out flags);
 
+	var stop = new ReaderWriterLockSlim();
 	if(colored)
 	{
 		replacement = $"\x1b[93m{replacement ?? "$&"}\x1b[m";
 		Console.CancelKeyPress += (_, _) =>
 		{
+			stop.EnterWriteLock();
 			if(stdOutHandle != Native.INVALID_HANDLE_VALUE && flags != Native.ConsoleModes.INVALID)
 				Native.SetConsoleMode(stdOutHandle, flags);
 		};
@@ -193,14 +202,19 @@ Exit status is 0 if any line is selected, 1 otherwise, 2 if any error occurs.");
 	}
 	else
 	{
-		source = source.Where(line => invertMatch ^ regex.IsMatch(line));
+		source = source.Where(line => all || invertMatch ^ regex.IsMatch(line));
 		if(replacement != null) source = source.Select(line => regex.Replace(line, replacement));
 	}
 
 	source
 		.With(_ => Interlocked.Increment(ref matches))
 		.AsSequential()
-		.ForEach(Console.Out.WriteLine);
+		.TakeWhile(_ => stop.TryEnterReadLock(0))
+		.ForEach(line =>
+		{
+			try { Console.Out.WriteLine(line); }
+			finally { stop.ExitReadLock(); }
+		});
 
 	total.Stop();
 	tick?.Change(Timeout.Infinite, Timeout.Infinite);

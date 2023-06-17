@@ -1,6 +1,6 @@
 # regrep
 
-regrep is a small search and replace command line tool
+regrep is a small search and replace windows command line tool
 
 ## Features
 * Regular expressions support
@@ -15,9 +15,10 @@ Usage: regrep [OPTIONS] PATTERN [REPLACEMENT]
 Search and replace for PATTERN in standard input using regular expression.
 
 Options:
+  -a, --match-all            Match all lines and only substitute REPLACEMENT
   -e, --encoding=ENCODING    Input/output ENCODING (default UTF-8)
   -i, --ignore-case          Ignore case distinctions
-  -v, --invert-match         Select non matching lines
+  -v, --invert-match         Select non-matching lines
   -o, --only-matching        Show only the part of a line matching PATTERN
   -n, --threads=VALUE        Number of threads (default 1)
   -s, --silent               Silent mode
